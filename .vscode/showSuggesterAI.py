@@ -1,3 +1,4 @@
+import base64
 import openai
 import pandas as pd
 import pickle
@@ -6,15 +7,27 @@ import logging
 from thefuzz import process
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
+import requests
+from PIL import Image
+from io import BytesIO
+from openai import OpenAI
+import time
 
+os.environ["OPENAI_API_KEY"] = "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"
 openai.api_key = "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"
+client = OpenAI()
+logging.basicConfig(
+    filename="logging.log",
+    level=logging.INFO,
+    format="%(asctime)s:%(levelname)s:%(message)s",
+)
 
 
 def get_embedding(tv_show_description):
-    embedding = openai.Embedding.create(
-        input=tv_show_description, engine="text-embedding-ada-002"
-    )["data"][0]["embedding"]
-    return embedding
+    embedding = client.embeddings.create(
+        input=tv_show_description, model="text-embedding-ada-002"
+    )
+    return embedding.data[0].embedding
 
 
 def generate_embeddings(csv_file_path):
@@ -54,7 +67,9 @@ def save_embeddings_to_pickle(embeddings_dict, pickle_file):
 
 
 def get_user_favorite_shows(tv_shows_list):
+    count = 0
     while True:
+        count += 1
         user_input = input(
             "Which TV shows did you love watching? Separate them by a comma.\nMake sure to enter more than 1 show: "
         )
@@ -78,6 +93,9 @@ def get_user_favorite_shows(tv_shows_list):
                 )
         else:
             print("Please enter more than one show.")
+            if count == 3:
+                print("Please restart the program and try again...")
+                return None
 
 
 def calculate_average_vector(shows, embeddings_dict):
@@ -86,6 +104,10 @@ def calculate_average_vector(shows, embeddings_dict):
 
 
 def get_recommendations(input_shows, embeddings_dict, top_n=5):
+    # Return empty list or dictionary if embeddings_dict is empty
+    if not embeddings_dict:
+        return {}  # Or return [] depending on what your function is expected to return
+
     average_vector = calculate_average_vector(input_shows, embeddings_dict)
 
     similarities = {}
@@ -93,6 +115,9 @@ def get_recommendations(input_shows, embeddings_dict, top_n=5):
         if show not in input_shows:
             similarity = cosine_similarity([average_vector], [vector])[0][0]
             similarities[show] = similarity
+
+    if not similarities:
+        return {}  # Or return [] depending on what your function is expected to return
 
     # Sort the shows based on similarity scores
     recommended_shows = sorted(similarities, key=similarities.get, reverse=True)[:top_n]
@@ -105,6 +130,71 @@ def get_recommendations(input_shows, embeddings_dict, top_n=5):
     }
 
     return recommendations
+
+
+def generate_image_with_dalle(newshow_and_description):
+    response = client.images.generate(
+        model="dall-e-3",
+        prompt=f"The following text is a TV show name and description:\n{newshow_and_description}\nCreate a TV poster for this show. Make it as realistic as possible and in the style of a Hollywood TV show poster.\n\nImage:",
+        size="1024x1024",
+        quality="standard",
+        n=1,
+        response_format="url",
+    )
+    image_url = response.data[0].url
+    return image_url
+
+
+def generate_show_name(tv_shows):
+    # Split the input string into individual TV show names
+    show_list = []
+    for show in tv_shows:
+        show_list.append(show)
+
+    message = {
+        "role": "user",
+        "content": "Based on the following TV shows, suggest a name for a new TV show and a description for that show: "
+        + ", ".join(show_list)
+        + "\nMake sure do write in the following format:\nNew Show Name:\nNew Show Description:",
+    }
+
+    try:
+        # Call GPT-3.5-turbo using the chat API
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo", messages=[message]
+        )
+
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return None
+
+
+def open_dalle_image(response):
+    # Check if the response is a URL
+    if isinstance(response, str) and response.startswith(("http://", "https://")):
+        # Handle URL
+        response = requests.get(response)
+        if response.status_code == 200:
+            image = Image.open(BytesIO(response.content))
+            image.show()
+        else:
+            print("Failed to retrieve the image from URL.")
+
+    # Check if the response is Base64 encoded
+    elif isinstance(response, str) and ";base64," in response:
+        base64_data = response.split(";base64,")[-1]
+        image_data = base64.b64decode(base64_data)
+        image = Image.open(BytesIO(image_data))
+        image.show()
+
+    # Handle binary data (assuming it's not URL or Base64)
+    elif isinstance(response, bytes):
+        image = Image.open(BytesIO(response))
+        image.show()
+
+    else:
+        print("Unknown image format.")
 
 
 def main():
@@ -129,9 +219,45 @@ def main():
 
     # Generate recommendations
     recommendations = get_recommendations(user_favorite_shows, embeddings_dict)
+    shows = ""
     print("Here are the TV shows that I think you would love:")
     for show, score in recommendations.items():
-        print(f"{show} ({score}%)")
+        shows += f"{show} ({score}%)\n"
+    print(shows)
+    show_name_and_description = generate_show_name(user_favorite_shows)
+    recommneded_show_and_description = generate_show_name(shows)
+    show1name = show_name_and_description.split("New Show Description:")[0].strip()
+    show1description = show_name_and_description.split("New Show Description:")[
+        1
+    ].strip()
+    show2name = recommneded_show_and_description.split("New Show Description:")[
+        0
+    ].strip()
+    show2description = recommneded_show_and_description.split("New Show Description:")[
+        1
+    ].strip()
+
+    logging.info(
+        "Show + description:"
+        + show1name
+        + "\nRecommendation:"
+        + recommneded_show_and_description
+        + "\nOnly show name:"
+        + show1name
+        + "\nOnly show description:"
+        + show1description
+        + "\nOnly recommendation name:"
+        + show2name
+        + "\nOnly recommendation description:"
+        + show2description
+    )
+    print(
+        f"”I have also created just for you two shows which I think you would love. Show #1 is based on the fact that you loved the input shows that you gave me. Its name is {show1name} and it is about: {show1description}. Show #2 is based on the shows that I recommended for you. Its name is {show2name} and it is about: {show2description}. Here are also the 2 tv show ads. Hope you like them!"
+    )
+    image_1 = generate_image_with_dalle(show_name_and_description)
+    image_2 = generate_image_with_dalle(recommneded_show_and_description)
+    open_dalle_image(image_1)
+    open_dalle_image(image_2)
 
 
 if __name__ == "__main__":

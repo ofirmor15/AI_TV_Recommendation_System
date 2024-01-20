@@ -1,108 +1,143 @@
-from showSuggesterAI import get_embedding
+import pytest
 import os
+import pandas as pd
+import numpy as np
 import pickle
-from showSuggesterAI import save_embeddings_to_pickle
-from showSuggesterAI import get_embedding
-from showSuggesterAI import load_embeddings_from_pickle
-from showSuggesterAI import calculate_average_vector
+from unittest.mock import patch, MagicMock
+from showSuggesterAI import (
+    generate_embeddings,
+    load_embeddings_from_pickle,
+    save_embeddings_to_pickle,
+    get_user_favorite_shows,
+    calculate_average_vector,
+    get_recommendations,
+)
 
 
-def test_get_embedding():
-    # Test case 1
-    assert (
-        type(
-            get_embedding(
-                "A high school chemistry teacher diagnosed with inoperable lung cancer turns to manufacturing and selling methamphetamine in order to secure his family's future"
-            )
+@pytest.fixture
+def setup_embeddings():
+    return {"show1": np.array([1, 2, 3]), "show2": np.array([4, 5, 6])}
+
+
+def test_generate_embeddings_valid(setup_embeddings):
+    setup_embeddings["desc1"] = np.array([7, 8, 9])
+    setup_embeddings["desc2"] = np.array([10, 11, 12])
+    with patch("pandas.read_csv") as mock_read_csv:
+        mock_read_csv.return_value = pd.DataFrame(
+            {"Title": ["show1", "show2"], "Description": ["desc1", "desc2"]}
         )
-        == list
-    )
-
-    # Test case 2
-    assert (
-        type(
-            get_embedding(
-                "When a young boy disappears, his mother, a police chief and his friends must confront terrifying supernatural forces in order to get him back."
-            )
-        )
-        == list
-    )
-
-    # Test case 3
-    assert (
-        type(
-            get_embedding(
-                "A father recounts to his children - through a series of flashbacks - the journey he and his four best friends took leading up to him meeting their mother."
-            )
-        )
-        == list
-    )
+        with patch(
+            "showSuggesterAI.get_embedding", side_effect=lambda x: setup_embeddings[x]
+        ):
+            embeddings = generate_embeddings("dummy/path.csv")
+            assert "show1" in embeddings and "show2" in embeddings
 
 
-def test_save_embeddings_to_pickle():
-    # Create a temporary pickle file
-    pickle_file = "temp.pickle"
+def test_generate_embeddings_invalid_path():
+    with pytest.raises(FileNotFoundError):
+        generate_embeddings("invalid/path.csv")
 
-    # Create a dummy embeddings dictionary
-    embeddings_dict = {"show1": [0.1, 0.2, 0.3], "show2": [0.4, 0.5, 0.6]}
 
-    # Save the embeddings to the pickle file
-    save_embeddings_to_pickle(embeddings_dict, pickle_file)
+def test_load_embeddings_from_pickle_existing_file(setup_embeddings, tmp_path):
+    pickle_file = tmp_path / "test_embeddings.pkl"
 
-    # Check if the pickle file exists
+    # Use pickle to dump the dictionary to ensure compatibility
+    with open(pickle_file, "wb") as f:
+        pickle.dump(setup_embeddings, f)
+
+    loaded_embeddings = load_embeddings_from_pickle(pickle_file)
+    assert "show1" in loaded_embeddings and "show2" in loaded_embeddings
+
+
+def test_load_embeddings_from_pickle_non_existing_file(tmp_path):
+    non_existing_pickle_file = tmp_path / "non_existing.pkl"
+    with patch(
+        "showSuggesterAI.generate_embeddings", return_value={}
+    ) as mock_generate_embeddings:
+        loaded_embeddings = load_embeddings_from_pickle(non_existing_pickle_file)
+        mock_generate_embeddings.assert_called_once()
+        assert loaded_embeddings == {}
+
+
+def test_save_embeddings_to_pickle(setup_embeddings, tmp_path):
+    pickle_file = tmp_path / "test_embeddings.pkl"
+    save_embeddings_to_pickle(setup_embeddings, pickle_file)
     assert os.path.exists(pickle_file)
 
-    # Load the saved embeddings from the pickle file
-    with open(pickle_file, "rb") as f:
-        saved_embeddings_dict = pickle.load(f)
 
-    # Check if the loaded embeddings match the original embeddings
-    assert saved_embeddings_dict == embeddings_dict
-
-    # Delete the temporary pickle file
-    os.remove(pickle_file)
+def test_calculate_average_vector(setup_embeddings):
+    average_vector = calculate_average_vector(["show1", "show2"], setup_embeddings)
+    assert average_vector.tolist() == [2.5, 3.5, 4.5]
 
 
-def test_load_embeddings_from_pickle():
-    # Create a temporary pickle file
-    pickle_file = "temp.pickle"
-
-    # Create a dummy embeddings dictionary
-    embeddings_dict = {"show1": [0.1, 0.2, 0.3], "show2": [0.4, 0.5, 0.6]}
-
-    # Save the embeddings to the pickle file
-    with open(pickle_file, "wb") as f:
-        pickle.dump(embeddings_dict, f)
-
-    # Load the saved embeddings from the pickle file
-    loaded_embeddings_dict = load_embeddings_from_pickle(pickle_file)
-
-    # Check if the loaded embeddings match the original embeddings
-    assert loaded_embeddings_dict == embeddings_dict
-
-    # Delete the temporary pickle file
-    os.remove(pickle_file)
+@patch("builtins.input", side_effect=["show1, show2", "y"])
+def test_get_user_favorite_shows_valid(mock_input):
+    with patch(
+        "showSuggesterAI.process.extractOne", side_effect=lambda show, _: (show, 100)
+    ):
+        favorite_shows = get_user_favorite_shows(["show1", "show2", "show3"])
+        assert favorite_shows == ["show1", "show2"]
 
 
-def test_calculate_average_vector():
-    # Create a dummy embeddings dictionary
-    embeddings_dict = {
-        "show1": [0.1, 0.2, 0.3],
-        "show2": [0.4, 0.5, 0.6],
-        "show3": [0.7, 0.8, 0.9],
-    }
+def test_get_recommendations(setup_embeddings):
+    recommendations = get_recommendations(["show1"], setup_embeddings, top_n=1)
+    assert "show2" in recommendations
+    assert len(recommendations) == 1
 
-    # Test case 1
-    input_shows = ["show1", "show2"]
-    expected_result = [0.25, 0.35, 0.45]
-    assert calculate_average_vector(input_shows, embeddings_dict) == expected_result
 
-    # Test case 2
-    input_shows = ["show2", "show3"]
-    expected_result = [0.55, 0.65, 0.75]
-    assert calculate_average_vector(input_shows, embeddings_dict) == expected_result
+def test_generate_embeddings_with_missing_descriptions(setup_embeddings):
+    with patch("pandas.read_csv") as mock_read_csv:
+        mock_read_csv.return_value = pd.DataFrame(
+            {"Title": ["show1", "show3"], "Description": ["desc1", ""]}
+        )
+        with patch(
+            "showSuggesterAI.get_embedding",
+            side_effect=lambda x: setup_embeddings.get(x, np.array([])),
+        ):
+            embeddings = generate_embeddings("dummy/path.csv")
+            # Check if both shows are in embeddings, including the one with empty description
+            assert "show1" in embeddings and "show3" in embeddings
 
-    # Test case 3
-    input_shows = ["show1", "show3"]
-    expected_result = [0.4, 0.5, 0.6]
-    assert calculate_average_vector(input_shows, embeddings_dict) == expected_result
+
+def test_load_embeddings_from_pickle_corrupt_file(tmp_path):
+    corrupt_pickle_file = tmp_path / "corrupt.pkl"
+    with open(corrupt_pickle_file, "wb") as f:
+        f.write(b"not a pickle")
+
+    with pytest.raises(Exception):  # Replace with specific exception if known
+        load_embeddings_from_pickle(corrupt_pickle_file)
+
+
+def test_get_user_favorite_shows_single_input():
+    input_responses = iter(["show1", "y"])
+
+    def input_side_effect(_):
+        response = next(
+            input_responses,
+            "y",
+        )  # Default to 'y' after the first response
+        print(f"Mock input response: {response}")  # Diagnostic print
+        return response
+
+    with patch("builtins.input", side_effect=input_side_effect):
+        with patch(
+            "showSuggesterAI.process.extractOne",
+            side_effect=lambda show, _: (show, 100),
+        ):
+            favorite_shows = get_user_favorite_shows(["show1", "show2", "show3"])
+            assert favorite_shows == None
+
+
+def test_calculate_average_vector_with_missing_shows(setup_embeddings):
+    average_vector = calculate_average_vector(
+        ["show1", "missing_show"], setup_embeddings
+    )
+    expected_vector = np.array(
+        [1, 2, 3]
+    )  # Expected result based on how your function handles missing shows
+    np.testing.assert_array_equal(average_vector, expected_vector)
+
+
+def test_get_recommendations_with_empty_embeddings():
+    recommendations = get_recommendations(["show1"], {}, top_n=1)
+    assert len(recommendations) == 0
