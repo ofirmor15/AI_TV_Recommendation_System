@@ -12,9 +12,12 @@ from PIL import Image
 from io import BytesIO
 from openai import OpenAI
 import time
+from dotenv import load_dotenv
 
-os.environ["OPENAI_API_KEY"] = "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"
-openai.api_key = "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"
+load_dotenv()
+
+os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
+openai.api_key = os.getenv("OPENAI_API_KEY")
 client = OpenAI()
 logging.basicConfig(
     filename="logging.log",
